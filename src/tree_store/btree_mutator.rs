@@ -8,7 +8,7 @@ use crate::tree_store::btree_mutator::DeletionResult::{
 use crate::tree_store::page_store::{Page, PageImpl};
 use crate::tree_store::{AccessGuardMut, PageNumber, TransactionalMemory};
 use crate::types::{RedbKey, RedbValue};
-use crate::{AccessGuard, Result};
+use crate::{file::File, AccessGuard, Result};
 use std::cmp::{max, min};
 use std::marker::PhantomData;
 
@@ -26,7 +26,7 @@ enum DeletionResult {
     DeletedBranch(PageNumber, Checksum),
 }
 
-struct InsertionResult<'a, V: RedbValue> {
+struct InsertionResult<'a, V: RedbValue, F: File> {
     // the new root page
     new_root: PageNumber,
     // checksum of the root page
@@ -34,25 +34,25 @@ struct InsertionResult<'a, V: RedbValue> {
     // Following sibling, if the root had to be split
     additional_sibling: Option<(Vec<u8>, PageNumber, Checksum)>,
     // The inserted value for .insert_reserve() to use
-    inserted_value: AccessGuardMut<'a, V>,
+    inserted_value: AccessGuardMut<'a, V, F>,
     // The previous value, if any
-    old_value: Option<AccessGuard<'a, V>>,
+    old_value: Option<AccessGuard<'a, V, F>>,
 }
 
-pub(crate) struct MutateHelper<'a, 'b, K: RedbKey, V: RedbValue> {
+pub(crate) struct MutateHelper<'a, 'b, K: RedbKey, V: RedbValue, F: File> {
     root: &'b mut Option<(PageNumber, Checksum)>,
     free_policy: FreePolicy,
-    mem: &'a TransactionalMemory,
+    mem: &'a TransactionalMemory<F>,
     freed: &'b mut Vec<PageNumber>,
     _key_type: PhantomData<K>,
     _value_type: PhantomData<V>,
 }
 
-impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
+impl<'a, 'b, K: RedbKey, V: RedbValue, F: File> MutateHelper<'a, 'b, K, V, F> {
     pub(crate) fn new(
         root: &'b mut Option<(PageNumber, Checksum)>,
         free_policy: FreePolicy,
-        mem: &'a TransactionalMemory,
+        mem: &'a TransactionalMemory<F>,
         freed: &'b mut Vec<PageNumber>,
     ) -> Self {
         Self {
@@ -69,12 +69,15 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
     pub(crate) fn safe_delete(
         &mut self,
         key: &K::SelfType<'_>,
-    ) -> Result<Option<AccessGuard<'a, V>>> {
+    ) -> Result<Option<AccessGuard<'a, V, F>>> {
         assert_eq!(self.free_policy, FreePolicy::Never);
         self.delete(key)
     }
 
-    pub(crate) fn delete(&mut self, key: &K::SelfType<'_>) -> Result<Option<AccessGuard<'a, V>>> {
+    pub(crate) fn delete(
+        &mut self,
+        key: &K::SelfType<'_>,
+    ) -> Result<Option<AccessGuard<'a, V, F>>> {
         if let Some((p, checksum)) = *self.root {
             let (deletion_result, found) =
                 self.delete_helper(self.mem.get_page(p)?, checksum, K::as_bytes(key).as_ref())?;
@@ -110,7 +113,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         &mut self,
         key: &K::SelfType<'_>,
         value: &V::SelfType<'_>,
-    ) -> Result<(Option<AccessGuard<'a, V>>, AccessGuardMut<'a, V>)> {
+    ) -> Result<(Option<AccessGuard<'a, V, F>>, AccessGuardMut<'a, V, F>)> {
         let (new_root, old_value, guard) = if let Some((p, checksum)) = *self.root {
             let result = self.insert_helper(
                 self.mem.get_page(p)?,
@@ -157,7 +160,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         page_checksum: Checksum,
         key: &[u8],
         value: &[u8],
-    ) -> Result<InsertionResult<'a, V>> {
+    ) -> Result<InsertionResult<'a, V, F>> {
         let node_mem = page.memory();
         Ok(match node_mem[0] {
             LEAF => {
@@ -480,7 +483,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         page: PageImpl<'a>,
         checksum: Checksum,
         key: &[u8],
-    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V>>)> {
+    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V, F>>)> {
         let accessor = LeafAccessor::new(page.memory(), K::fixed_width(), V::fixed_width());
         let (position, found) = accessor.position::<K>(key);
         if !found {
@@ -489,7 +492,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         let new_kv_bytes = accessor.length_of_pairs(0, accessor.num_pairs())
             - accessor.length_of_pairs(position, position + 1);
         let new_required_bytes =
-            LeafBuilder::required_bytes(accessor.num_pairs() - 1, new_kv_bytes);
+            LeafBuilder::<F>::required_bytes(accessor.num_pairs() - 1, new_kv_bytes);
         let uncommitted = self.mem.uncommitted(page.get_page_number());
 
         // Fast-path for dirty pages
@@ -568,7 +571,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         Ok((result, guard))
     }
 
-    fn finalize_branch_builder(&self, builder: BranchBuilder<'_, '_>) -> Result<DeletionResult> {
+    fn finalize_branch_builder(&self, builder: BranchBuilder<'_, '_, F>) -> Result<DeletionResult> {
         let result = if let Some((only_child, checksum)) = builder.to_single_child() {
             DeletedBranch(only_child, checksum)
         } else {
@@ -600,7 +603,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         page: PageImpl<'a>,
         checksum: Checksum,
         key: &[u8],
-    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V>>)> {
+    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V, F>>)> {
         let accessor = BranchAccessor::new(&page, K::fixed_width());
         let original_page_number = page.get_page_number();
         let (child_index, child_page_number) = accessor.child_for_key::<K>(key);
@@ -933,7 +936,7 @@ impl<'a, 'b, K: RedbKey, V: RedbValue> MutateHelper<'a, 'b, K, V> {
         page: PageImpl<'a>,
         checksum: Checksum,
         key: &[u8],
-    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V>>)> {
+    ) -> Result<(DeletionResult, Option<AccessGuard<'a, V, F>>)> {
         let node_mem = page.memory();
         match node_mem[0] {
             LEAF => self.delete_leaf_helper(page, checksum, key),

@@ -47,6 +47,15 @@ pub enum Error {
     LockPoisoned(&'static panic::Location<'static>),
 }
 
+impl From<crate::file::LockedFileError> for Error {
+    fn from(value: crate::file::LockedFileError) -> Self {
+        match value {
+            crate::file::LockedFileError::DatabaseAlreadyOpen => Self::DatabaseAlreadyOpen,
+            crate::file::LockedFileError::Io(io) => Self::Io(io),
+        }
+    }
+}
+
 impl<T> From<PoisonError<T>> for Error {
     fn from(_: PoisonError<T>) -> Error {
         Error::LockPoisoned(panic::Location::caller())

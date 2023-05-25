@@ -35,7 +35,7 @@ impl SpecialValuesDb {
 }
 
 struct SpecialValuesTransaction<'db> {
-    inner: WriteTransaction<'db>,
+    inner: WriteTransaction<'db, File>,
     file: &'db mut File,
 }
 
@@ -59,7 +59,7 @@ impl<'db> SpecialValuesTransaction<'db> {
 }
 
 struct SpecialValuesTable<'db, 'txn, K: RedbKey + 'static, V: RedbValue + 'static> {
-    inner: Table<'db, 'txn, K, (u64, u64)>,
+    inner: Table<'db, 'txn, K, (u64, u64), File>,
     file: &'txn mut File,
     _value_type: PhantomData<V>,
 }

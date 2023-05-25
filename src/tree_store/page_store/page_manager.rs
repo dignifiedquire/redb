@@ -1,3 +1,4 @@
+use crate::file::File;
 use crate::transaction_tracker::TransactionId;
 use crate::tree_store::btree_base::Checksum;
 use crate::tree_store::page_store::base::PageHint;
@@ -20,7 +21,6 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
-use std::fs::File;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -206,7 +206,7 @@ impl Allocators {
         }
     }
 
-    fn from_bytes(header: &DatabaseHeader, storage: &PagedCachedFile) -> Result<Self> {
+    fn from_bytes<F: File>(header: &DatabaseHeader, storage: &PagedCachedFile<F>) -> Result<Self> {
         let page_size = header.page_size();
         let region_header_size = header.region_header_pages() * page_size;
         let region_size =
@@ -241,11 +241,11 @@ impl Allocators {
         })
     }
 
-    fn flush_to(
+    fn flush_to<F: File>(
         &self,
         region_tracker_page: PageNumber,
         layout: DatabaseLayout,
-        storage: &mut PagedCachedFile,
+        storage: &mut PagedCachedFile<F>,
     ) -> Result {
         let page_size = layout.full_region_layout().page_size();
         let region_header_size =
@@ -360,7 +360,7 @@ struct InMemoryState {
 }
 
 impl InMemoryState {
-    fn from_bytes(header: DatabaseHeader, file: &PagedCachedFile) -> Result<Self> {
+    fn from_bytes<F: File>(header: DatabaseHeader, file: &PagedCachedFile<F>) -> Result<Self> {
         let allocators = Allocators::from_bytes(&header, file)?;
         Ok(Self { header, allocators })
     }
@@ -378,13 +378,13 @@ impl InMemoryState {
     }
 }
 
-pub(crate) struct TransactionalMemory {
+pub(crate) struct TransactionalMemory<F: File> {
     // Pages allocated since the last commit
     allocated_since_commit: Mutex<HashSet<PageNumber>>,
     log_since_commit: Mutex<Vec<AllocationOp>>,
     // True if the allocator state was corrupted when the file was opened
     needs_recovery: AtomicBool,
-    storage: PagedCachedFile,
+    storage: PagedCachedFile<F>,
     state: Mutex<InMemoryState>,
     // The current layout for the active transaction.
     // May include uncommitted changes to the database layout, if it grew or shrank
@@ -405,10 +405,10 @@ pub(crate) struct TransactionalMemory {
     deferred_error: Mutex<Option<Error>>,
 }
 
-impl TransactionalMemory {
+impl<F: File> TransactionalMemory<F> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        file: File,
+        file: F,
         page_size: usize,
         requested_region_size: Option<u64>,
         read_cache_size_bytes: usize,
@@ -441,7 +441,7 @@ impl TransactionalMemory {
         )?;
 
         {
-            let file_len = file.metadata()?.len();
+            let file_len = file.metadata()?.len;
 
             if file_len < layout.len() {
                 file.set_len(layout.len())?;
@@ -1488,7 +1488,7 @@ impl TransactionalMemory {
     }
 }
 
-impl Drop for TransactionalMemory {
+impl<F: File> Drop for TransactionalMemory<F> {
     fn drop(&mut self) {
         // Commit any non-durable transactions that are outstanding
         if self.read_from_secondary.load(Ordering::Acquire)

@@ -1,7 +1,7 @@
 use crate::tree_store::page_store::{xxh3_checksum, Page, PageImpl, PageMut, TransactionalMemory};
 use crate::tree_store::PageNumber;
 use crate::types::{RedbKey, RedbValue, RedbValueMutInPlace};
-use crate::Result;
+use crate::{file::File, Result};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -43,11 +43,11 @@ pub(crate) enum FreePolicy {
 }
 
 impl FreePolicy {
-    pub(crate) fn conditional_free(
+    pub(crate) fn conditional_free<F: File>(
         &self,
         page: PageNumber,
         freed: &mut Vec<PageNumber>,
-        mem: &TransactionalMemory,
+        mem: &TransactionalMemory<F>,
     ) {
         match self {
             FreePolicy::Never => {
@@ -61,7 +61,11 @@ impl FreePolicy {
         }
     }
 
-    pub(crate) fn free_on_drop(&self, page: PageNumber, mem: &TransactionalMemory) -> bool {
+    pub(crate) fn free_on_drop<F: File>(
+        &self,
+        page: PageNumber,
+        mem: &TransactionalMemory<F>,
+    ) -> bool {
         match self {
             FreePolicy::Never => false,
             FreePolicy::Uncommitted => mem.uncommitted(page),
@@ -94,22 +98,22 @@ impl<'a> EitherPage<'a> {
     }
 }
 
-pub struct AccessGuard<'a, V: RedbValue> {
+pub struct AccessGuard<'a, V: RedbValue, F: File> {
     page: EitherPage<'a>,
     offset: usize,
     len: usize,
     on_drop: OnDrop,
-    mem: Option<&'a TransactionalMemory>,
+    mem: Option<&'a TransactionalMemory<F>>,
     _value_type: PhantomData<V>,
 }
 
-impl<'a, V: RedbValue> AccessGuard<'a, V> {
+impl<'a, V: RedbValue, F: File> AccessGuard<'a, V, F> {
     pub(super) fn new(
         page: PageImpl<'a>,
         offset: usize,
         len: usize,
         free_on_drop: bool,
-        mem: &'a TransactionalMemory,
+        mem: &'a TransactionalMemory<F>,
     ) -> Self {
         let page_number = page.get_page_number();
         Self {
@@ -155,7 +159,7 @@ impl<'a, V: RedbValue> AccessGuard<'a, V> {
         len: usize,
         position: usize,
         fixed_key_size: Option<usize>,
-        mem: &'a TransactionalMemory,
+        mem: &'a TransactionalMemory<F>,
     ) -> Self {
         Self {
             page: EitherPage::Mutable(page),
@@ -175,7 +179,7 @@ impl<'a, V: RedbValue> AccessGuard<'a, V> {
     }
 }
 
-impl<'a, V: RedbValue> Drop for AccessGuard<'a, V> {
+impl<'a, V: RedbValue, F: File> Drop for AccessGuard<'a, V, F> {
     fn drop(&mut self) {
         match self.on_drop {
             OnDrop::None => {}
@@ -201,9 +205,9 @@ impl<'a, V: RedbValue> Drop for AccessGuard<'a, V> {
     }
 }
 
-pub struct AccessGuardMut<'a, V: RedbValue> {
+pub struct AccessGuardMut<'a, V: RedbValue, F: File> {
     root: Arc<Mutex<Option<(PageNumber, Checksum)>>>,
-    mem: &'a TransactionalMemory,
+    mem: &'a TransactionalMemory<F>,
     page: PageMut<'a>,
     offset: usize,
     len: usize,
@@ -213,12 +217,12 @@ pub struct AccessGuardMut<'a, V: RedbValue> {
     _value_type: PhantomData<V>,
 }
 
-impl<'a, V: RedbValue> AccessGuardMut<'a, V> {
+impl<'a, V: RedbValue, F: File + 'a> AccessGuardMut<'a, V, F> {
     pub(crate) fn new<K: RedbKey>(
         page: PageMut<'a>,
         offset: usize,
         len: usize,
-        mem: &'a TransactionalMemory,
+        mem: &'a TransactionalMemory<F>,
     ) -> Self {
         AccessGuardMut {
             root: Arc::new(Mutex::new(None)),
@@ -237,7 +241,7 @@ impl<'a, V: RedbValue> AccessGuardMut<'a, V> {
         page_number: PageNumber,
         leaf_page_number: PageNumber,
         path: &mut Vec<usize>,
-        mem: &TransactionalMemory,
+        mem: &TransactionalMemory<F>,
     ) -> Result {
         // Don't try to read the leaf page, because we already have a PageMut for it, and so can't open it again
         if page_number == leaf_page_number {
@@ -314,13 +318,13 @@ impl<'a, V: RedbValue> AccessGuardMut<'a, V> {
     }
 }
 
-impl<'a, V: RedbValueMutInPlace> AsMut<V::BaseRefType> for AccessGuardMut<'a, V> {
+impl<'a, V: RedbValueMutInPlace, F: File> AsMut<V::BaseRefType> for AccessGuardMut<'a, V, F> {
     fn as_mut(&mut self) -> &mut V::BaseRefType {
         V::from_bytes_mut(&mut self.page.memory_mut()[self.offset..(self.offset + self.len)])
     }
 }
 
-impl<'a, V: RedbValue> Drop for AccessGuardMut<'a, V> {
+impl<'a, V: RedbValue, F: File> Drop for AccessGuardMut<'a, V, F> {
     fn drop(&mut self) {
         // Was dropped before being returned to the user, so no clean up needed
         if self.root.lock().unwrap().is_none() {
@@ -562,22 +566,22 @@ impl<'a> LeafAccessor<'a> {
     }
 }
 
-pub(super) struct LeafBuilder<'a, 'b> {
+pub(super) struct LeafBuilder<'a, 'b, F: File> {
     pairs: Vec<(&'a [u8], &'a [u8])>,
     fixed_key_size: Option<usize>,
     fixed_value_size: Option<usize>,
     total_key_bytes: usize,
     total_value_bytes: usize,
-    mem: &'b TransactionalMemory,
+    mem: &'b TransactionalMemory<F>,
 }
 
-impl<'a, 'b> LeafBuilder<'a, 'b> {
+impl<'a, 'b, F: File> LeafBuilder<'a, 'b, F> {
     pub(super) fn required_bytes(num_pairs: usize, keys_values_bytes: usize) -> usize {
         RawLeafBuilder::required_bytes(num_pairs, keys_values_bytes)
     }
 
     pub(super) fn new(
-        mem: &'b TransactionalMemory,
+        mem: &'b TransactionalMemory<F>,
         capacity: usize,
         fixed_key_size: Option<usize>,
         fixed_value_size: Option<usize>,
@@ -1304,17 +1308,17 @@ impl<'a: 'b, 'b, T: Page + 'a> BranchAccessor<'a, 'b, T> {
     }
 }
 
-pub(super) struct BranchBuilder<'a, 'b> {
+pub(super) struct BranchBuilder<'a, 'b, F: File> {
     children: Vec<(PageNumber, Checksum)>,
     keys: Vec<&'a [u8]>,
     total_key_bytes: usize,
     fixed_key_size: Option<usize>,
-    mem: &'b TransactionalMemory,
+    mem: &'b TransactionalMemory<F>,
 }
 
-impl<'a, 'b> BranchBuilder<'a, 'b> {
+impl<'a, 'b, F: File> BranchBuilder<'a, 'b, F> {
     pub(super) fn new(
-        mem: &'b TransactionalMemory,
+        mem: &'b TransactionalMemory<F>,
         child_capacity: usize,
         fixed_key_size: Option<usize>,
     ) -> Self {

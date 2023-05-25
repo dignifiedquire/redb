@@ -2,7 +2,6 @@ mod base;
 mod bitmap;
 mod buddy_allocator;
 mod cached_file;
-mod file_lock;
 mod header;
 mod layout;
 mod page_manager;

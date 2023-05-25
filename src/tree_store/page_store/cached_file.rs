@@ -1,13 +1,11 @@
+use crate::file::File;
+use crate::file::LockedFile;
 use crate::tree_store::page_store::base::PageHint;
-use crate::tree_store::page_store::file_lock::LockedFile;
 use crate::{Error, Result};
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::io;
 use std::mem;
 use std::ops::{DerefMut, Index, IndexMut};
-#[cfg(any(target_os = "linux", all(unix, not(fuzzing))))]
-use std::os::unix::io::AsRawFd;
 use std::slice::SliceIndex;
 #[cfg(any(fuzzing, test, feature = "cache_metrics"))]
 use std::sync::atomic::AtomicU64;
@@ -56,8 +54,8 @@ impl<'a, I: SliceIndex<[u8]>> IndexMut<I> for WritablePage<'a> {
     }
 }
 
-pub(super) struct PagedCachedFile {
-    file: LockedFile,
+pub(super) struct PagedCachedFile<F: File> {
+    file: F::LockedFile,
     page_size: u64,
     max_read_cache_bytes: usize,
     read_cache_bytes: AtomicUsize,
@@ -75,9 +73,9 @@ pub(super) struct PagedCachedFile {
     crash_countdown: AtomicU64,
 }
 
-impl PagedCachedFile {
+impl<F: File> PagedCachedFile<F> {
     pub(super) fn new(
-        file: File,
+        file: F,
         page_size: u64,
         max_read_cache_bytes: usize,
         max_write_buffer_bytes: usize,
@@ -87,7 +85,7 @@ impl PagedCachedFile {
             read_cache.push(RwLock::new(BTreeMap::new()));
         }
 
-        let lock = LockedFile::new(file)?;
+        let lock = F::LockedFile::new(file)?;
 
         // Try to flush any pages in the page cache that are out of sync with disk.
         // See here for why: <https://github.com/cberner/redb/issues/450>
@@ -121,7 +119,7 @@ impl PagedCachedFile {
     }
 
     pub(crate) fn file_len(&self) -> Result<u64> {
-        Ok(self.file.file().metadata()?.len())
+        Ok(self.file.file().metadata()?.len)
     }
 
     const fn lock_stripes() -> usize {
@@ -209,11 +207,11 @@ impl PagedCachedFile {
         #[cfg(all(target_os = "macos", not(fuzzing)))]
         {
             self.flush_write_buffer()?;
-            let code = unsafe { libc::fcntl(self.file.file().as_raw_fd(), libc::F_BARRIERFSYNC) };
-            if code == -1 {
+            let res = self.file.file().fsync();
+            if res.is_err() {
                 self.set_fsync_failed(true);
-                return Err(io::Error::last_os_error().into());
             }
+            res?;
         }
 
         Ok(())
@@ -233,7 +231,7 @@ impl PagedCachedFile {
             }
         }
         self.check_fsync_failure()?;
-        self.file.read(offset, len)
+        self.file.read(offset, len).map_err(Into::into)
     }
 
     // Read with caching. Caller must not read overlapping ranges without first calling invalidate_cache().

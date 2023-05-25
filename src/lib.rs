@@ -36,3 +36,6 @@ mod transactions;
 mod tree_store;
 mod tuple_types;
 mod types;
+
+pub mod file;
+mod file_lock;

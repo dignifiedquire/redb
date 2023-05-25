@@ -6,7 +6,7 @@ use crate::tree_store::{
 };
 use crate::types::{RedbKey, RedbValue};
 use crate::{
-    Database, Error, MultimapTable, MultimapTableDefinition, MultimapTableHandle,
+    file::File, Database, Error, MultimapTable, MultimapTableDefinition, MultimapTableHandle,
     ReadOnlyMultimapTable, ReadOnlyTable, ReadableTable, Result, Savepoint, Table, TableDefinition,
     TableHandle, UntypedMultimapTableHandle, UntypedTableHandle,
 };
@@ -187,16 +187,16 @@ pub enum Durability {
 /// A read/write transaction
 ///
 /// Only a single [`WriteTransaction`] may exist at a time
-pub struct WriteTransaction<'db> {
-    db: &'db Database,
+pub struct WriteTransaction<'db, F: File> {
+    db: &'db Database<F>,
     transaction_tracker: Arc<Mutex<TransactionTracker>>,
-    mem: &'db TransactionalMemory,
+    mem: &'db TransactionalMemory<F>,
     transaction_id: TransactionId,
-    table_tree: RwLock<TableTree<'db>>,
-    system_table_tree: RwLock<TableTree<'db>>,
+    table_tree: RwLock<TableTree<'db, F>>,
+    system_table_tree: RwLock<TableTree<'db, F>>,
     // The table of freed pages by transaction. FreedTableKey -> binary.
     // The binary blob is a length-prefixed array of PageNumber
-    freed_tree: Mutex<BtreeMut<'db, FreedTableKey, FreedPageList<'static>>>,
+    freed_tree: Mutex<BtreeMut<'db, FreedTableKey, FreedPageList<'static>, F>>,
     freed_pages: Arc<Mutex<Vec<PageNumber>>>,
     // Pages that were freed from the freed-tree. These can be freed immediately after commit(),
     // since read transactions do not access the freed-tree
@@ -211,9 +211,9 @@ pub struct WriteTransaction<'db> {
     live_write_transaction: MutexGuard<'db, Option<TransactionId>>,
 }
 
-impl<'db> WriteTransaction<'db> {
+impl<'db, F: File> WriteTransaction<'db, F> {
     pub(crate) fn new(
-        db: &'db Database,
+        db: &'db Database<F>,
         transaction_tracker: Arc<Mutex<TransactionTracker>>,
     ) -> Result<Self> {
         let mut live_write_transaction = db.live_write_transaction.lock().unwrap();
@@ -263,7 +263,7 @@ impl<'db> WriteTransaction<'db> {
     fn open_system_table<'txn, K: RedbKey + 'static, V: RedbValue + 'static>(
         &'txn self,
         definition: SystemTableDefinition<K, V>,
-    ) -> Result<Table<'db, 'txn, K, V>> {
+    ) -> Result<Table<'db, 'txn, K, V, F>> {
         #[cfg(feature = "logging")]
         info!("Opening system table: {}", definition);
         if let Some(location) = self
@@ -519,7 +519,7 @@ impl<'db> WriteTransaction<'db> {
     pub fn open_table<'txn, K: RedbKey + 'static, V: RedbValue + 'static>(
         &'txn self,
         definition: TableDefinition<K, V>,
-    ) -> Result<Table<'db, 'txn, K, V>> {
+    ) -> Result<Table<'db, 'txn, K, V, F>> {
         #[cfg(feature = "logging")]
         info!("Opening table: {}", definition);
         if let Some(location) = self.open_tables.lock().unwrap().get(definition.name()) {
@@ -556,7 +556,7 @@ impl<'db> WriteTransaction<'db> {
     pub fn open_multimap_table<'txn, K: RedbKey + 'static, V: RedbKey + 'static>(
         &'txn self,
         definition: MultimapTableDefinition<K, V>,
-    ) -> Result<MultimapTable<'db, 'txn, K, V>> {
+    ) -> Result<MultimapTable<'db, 'txn, K, V, F>> {
         #[cfg(feature = "logging")]
         info!("Opening multimap table: {}", definition);
         if let Some(location) = self.open_tables.lock().unwrap().get(definition.name()) {
@@ -591,7 +591,7 @@ impl<'db> WriteTransaction<'db> {
         &self,
         name: &str,
         system: bool,
-        table: &mut BtreeMut<K, V>,
+        table: &mut BtreeMut<K, V, F>,
     ) {
         if system {
             self.open_system_tables
@@ -930,7 +930,7 @@ impl<'db> WriteTransaction<'db> {
             .unwrap()
         {
             eprintln!("Master tree:");
-            let master_tree: Btree<&str, InternalTableDefinition> =
+            let master_tree: Btree<&str, InternalTableDefinition, _> =
                 Btree::new(Some(page), PageHint::None, self.mem)?;
             master_tree.print_debug(true)?;
         }
@@ -939,7 +939,7 @@ impl<'db> WriteTransaction<'db> {
     }
 }
 
-impl<'a> Drop for WriteTransaction<'a> {
+impl<'a, F: File> Drop for WriteTransaction<'a, F> {
     fn drop(&mut self) {
         *self.live_write_transaction = None;
         if !self.completed && !thread::panicking() {
@@ -955,16 +955,16 @@ impl<'a> Drop for WriteTransaction<'a> {
 /// A read-only transaction
 ///
 /// Read-only transactions may exist concurrently with writes
-pub struct ReadTransaction<'a> {
+pub struct ReadTransaction<'a, F: File> {
     transaction_tracker: Arc<Mutex<TransactionTracker>>,
-    mem: &'a TransactionalMemory,
-    tree: TableTree<'a>,
+    mem: &'a TransactionalMemory<F>,
+    tree: TableTree<'a, F>,
     transaction_id: TransactionId,
 }
 
-impl<'db> ReadTransaction<'db> {
+impl<'db, F: File> ReadTransaction<'db, F> {
     pub(crate) fn new(
-        mem: &'db TransactionalMemory,
+        mem: &'db TransactionalMemory<F>,
         transaction_tracker: Arc<Mutex<TransactionTracker>>,
         transaction_id: TransactionId,
     ) -> Self {
@@ -981,7 +981,7 @@ impl<'db> ReadTransaction<'db> {
     pub fn open_table<K: RedbKey + 'static, V: RedbValue + 'static>(
         &self,
         definition: TableDefinition<K, V>,
-    ) -> Result<ReadOnlyTable<K, V>> {
+    ) -> Result<ReadOnlyTable<K, V, F>> {
         let header = self
             .tree
             .get_table::<K, V>(definition.name(), TableType::Normal)?
@@ -994,7 +994,7 @@ impl<'db> ReadTransaction<'db> {
     pub fn open_multimap_table<K: RedbKey + 'static, V: RedbKey + 'static>(
         &self,
         definition: MultimapTableDefinition<K, V>,
-    ) -> Result<ReadOnlyMultimapTable<K, V>> {
+    ) -> Result<ReadOnlyMultimapTable<K, V, F>> {
         let header = self
             .tree
             .get_table::<K, V>(definition.name(), TableType::Multimap)?
@@ -1018,7 +1018,7 @@ impl<'db> ReadTransaction<'db> {
     }
 }
 
-impl<'a> Drop for ReadTransaction<'a> {
+impl<'a, F: File> Drop for ReadTransaction<'a, F> {
     fn drop(&mut self) {
         self.transaction_tracker
             .lock()
@@ -1037,7 +1037,7 @@ mod test {
     #[test]
     fn transaction_id_persistence() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-        let db = Database::create(tmpfile.path()).unwrap();
+        let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
         let write_txn = db.begin_write().unwrap();
         {
             let mut table = write_txn.open_table(X).unwrap();
@@ -1047,7 +1047,7 @@ mod test {
         write_txn.commit().unwrap();
         drop(db);
 
-        let db2 = Database::create(tmpfile.path()).unwrap();
+        let db2 = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
         let write_txn = db2.begin_write().unwrap();
         assert!(write_txn.transaction_id > first_txn_id);
     }
