@@ -388,6 +388,7 @@ impl TransactionHeader {
 #[cfg(test)]
 mod test {
     use crate::db::TableDefinition;
+    use crate::file::StdFs;
     use crate::tree_store::page_store::header::{
         GOD_BYTE_OFFSET, MAGICNUMBER, PAGE_SIZE, PRIMARY_BIT, RECOVERY_REQUIRED,
         TRANSACTION_0_OFFSET, TRANSACTION_1_OFFSET, USER_ROOT_CHECKSUM_OFFSET,
@@ -406,9 +407,7 @@ mod test {
     #[test]
     fn repair_allocator_checksums() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-        let db = Database::<std::fs::File>::builder()
-            .create(tmpfile.path())
-            .unwrap();
+        let db = Database::<StdFs>::builder().create(tmpfile.path()).unwrap();
         let write_txn = db.begin_write().unwrap();
         {
             let mut table = write_txn.open_table(X).unwrap();
@@ -454,14 +453,14 @@ mod test {
         file.write_all(&[0; size_of::<u128>()]).unwrap();
 
         assert!(
-            TransactionalMemory::<std::fs::File>::new(file, PAGE_SIZE, None, 0, 0)
+            TransactionalMemory::<StdFs>::new(file, PAGE_SIZE, None, 0, 0)
                 .unwrap()
                 .needs_repair()
                 .unwrap()
         );
 
         #[allow(unused_mut)]
-        let mut db2 = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+        let mut db2 = Database::<StdFs>::create(tmpfile.path()).unwrap();
         let write_txn = db2.begin_write().unwrap();
         {
             let mut table = write_txn.open_table(X).unwrap();
@@ -522,9 +521,7 @@ mod test {
     #[test]
     fn repair_empty() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-        let db = Database::<std::fs::File>::builder()
-            .create(tmpfile.path())
-            .unwrap();
+        let db = Database::<StdFs>::builder().create(tmpfile.path()).unwrap();
         drop(db);
 
         let mut file = OpenOptions::new()
@@ -541,21 +538,19 @@ mod test {
         file.write_all(&buffer).unwrap();
 
         assert!(
-            TransactionalMemory::<std::fs::File>::new(file, PAGE_SIZE, None, 0, 0)
+            TransactionalMemory::<StdFs>::new(file, PAGE_SIZE, None, 0, 0)
                 .unwrap()
                 .needs_repair()
                 .unwrap()
         );
 
-        Database::<std::fs::File>::open(tmpfile.path()).unwrap();
+        Database::<StdFs>::open(tmpfile.path()).unwrap();
     }
 
     #[test]
     fn repair_insert_reserve_regression() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-        let db = Database::<std::fs::File>::builder()
-            .create(tmpfile.path())
-            .unwrap();
+        let db = Database::<StdFs>::builder().create(tmpfile.path()).unwrap();
 
         let def: TableDefinition<&str, &[u8]> = TableDefinition::new("x");
 
@@ -591,13 +586,13 @@ mod test {
         file.write_all(&buffer).unwrap();
 
         assert!(
-            TransactionalMemory::<std::fs::File>::new(file, PAGE_SIZE, None, 0, 0)
+            TransactionalMemory::<StdFs>::new(file, PAGE_SIZE, None, 0, 0)
                 .unwrap()
                 .needs_repair()
                 .unwrap()
         );
 
-        Database::<std::fs::File>::open(tmpfile.path()).unwrap();
+        Database::<StdFs>::open(tmpfile.path()).unwrap();
     }
 
     #[test]

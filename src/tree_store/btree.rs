@@ -7,7 +7,7 @@ use crate::tree_store::btree_mutator::MutateHelper;
 use crate::tree_store::page_store::{Page, PageImpl, TransactionalMemory};
 use crate::tree_store::{AccessGuardMut, BtreeDrainFilter, BtreeRangeIter, PageHint, PageNumber};
 use crate::types::{RedbKey, RedbValue, RedbValueMutInPlace};
-use crate::{file::File, AccessGuard, Result};
+use crate::{file::Fs, AccessGuard, Result};
 #[cfg(feature = "logging")]
 use log::trace;
 use std::borrow::Borrow;
@@ -25,7 +25,7 @@ pub(crate) struct BtreeStats {
     pub(crate) fragmented_bytes: u64,
 }
 
-pub(crate) struct UntypedBtreeMut<'a, F: File> {
+pub(crate) struct UntypedBtreeMut<'a, F: Fs> {
     mem: &'a TransactionalMemory<F>,
     root: Arc<Mutex<Option<(PageNumber, Checksum)>>>,
     freed_pages: Arc<Mutex<Vec<PageNumber>>>,
@@ -33,7 +33,7 @@ pub(crate) struct UntypedBtreeMut<'a, F: File> {
     value_width: Option<usize>,
 }
 
-impl<'a, F: File> UntypedBtreeMut<'a, F> {
+impl<'a, F: Fs> UntypedBtreeMut<'a, F> {
     pub(crate) fn new(
         root: Option<(PageNumber, Checksum)>,
         mem: &'a TransactionalMemory<F>,
@@ -105,7 +105,7 @@ impl<'a, F: File> UntypedBtreeMut<'a, F> {
     }
 }
 
-pub(crate) struct BtreeMut<'a, K: RedbKey, V: RedbValue, F: File> {
+pub(crate) struct BtreeMut<'a, K: RedbKey, V: RedbValue, F: Fs> {
     mem: &'a TransactionalMemory<F>,
     root: Arc<Mutex<Option<(PageNumber, Checksum)>>>,
     freed_pages: Arc<Mutex<Vec<PageNumber>>>,
@@ -113,7 +113,7 @@ pub(crate) struct BtreeMut<'a, K: RedbKey, V: RedbValue, F: File> {
     _value_type: PhantomData<V>,
 }
 
-impl<'a, K: RedbKey + 'a, V: RedbValue + 'a, F: File> BtreeMut<'a, K, V, F> {
+impl<'a, K: RedbKey + 'a, V: RedbValue + 'a, F: Fs> BtreeMut<'a, K, V, F> {
     pub(crate) fn new(
         root: Option<(PageNumber, Checksum)>,
         mem: &'a TransactionalMemory<F>,
@@ -309,7 +309,7 @@ impl<'a, K: RedbKey + 'a, V: RedbValue + 'a, F: File> BtreeMut<'a, K, V, F> {
     }
 }
 
-impl<'a, K: RedbKey + 'a, V: RedbValueMutInPlace + 'a, F: File> BtreeMut<'a, K, V, F> {
+impl<'a, K: RedbKey + 'a, V: RedbValueMutInPlace + 'a, F: Fs> BtreeMut<'a, K, V, F> {
     /// Reserve space to insert a key-value pair
     /// The returned reference will have length equal to value_length
     // Return type has the same lifetime as &self, because the tree must not be modified until the mutable guard is dropped
@@ -342,14 +342,14 @@ impl<'a, K: RedbKey + 'a, V: RedbValueMutInPlace + 'a, F: File> BtreeMut<'a, K, 
     }
 }
 
-pub(crate) struct RawBtree<'a, F: File> {
+pub(crate) struct RawBtree<'a, F: Fs> {
     mem: &'a TransactionalMemory<F>,
     root: Option<(PageNumber, Checksum)>,
     fixed_key_size: Option<usize>,
     fixed_value_size: Option<usize>,
 }
 
-impl<'a, F: File> RawBtree<'a, F> {
+impl<'a, F: Fs> RawBtree<'a, F> {
     pub(crate) fn new(
         root: Option<(PageNumber, Checksum)>,
         fixed_key_size: Option<usize>,
@@ -404,7 +404,7 @@ impl<'a, F: File> RawBtree<'a, F> {
     }
 }
 
-pub(crate) struct Btree<'a, K: RedbKey, V: RedbValue, F: File> {
+pub(crate) struct Btree<'a, K: RedbKey, V: RedbValue, F: Fs> {
     mem: &'a TransactionalMemory<F>,
     // Cache of the root page to avoid repeated lookups
     cached_root: Option<PageImpl<'a>>,
@@ -414,7 +414,7 @@ pub(crate) struct Btree<'a, K: RedbKey, V: RedbValue, F: File> {
     _value_type: PhantomData<V>,
 }
 
-impl<'a, K: RedbKey, V: RedbValue, F: File> Btree<'a, K, V, F> {
+impl<'a, K: RedbKey, V: RedbValue, F: Fs> Btree<'a, K, V, F> {
     pub(crate) fn new(
         root: Option<(PageNumber, Checksum)>,
         hint: PageHint,
@@ -532,7 +532,7 @@ impl<'a, K: RedbKey, V: RedbValue, F: File> Btree<'a, K, V, F> {
     }
 }
 
-pub(crate) fn btree_stats<F: File>(
+pub(crate) fn btree_stats<F: Fs>(
     root: Option<PageNumber>,
     mem: &TransactionalMemory<F>,
     fixed_key_size: Option<usize>,
@@ -552,7 +552,7 @@ pub(crate) fn btree_stats<F: File>(
     }
 }
 
-fn stats_helper<F: File>(
+fn stats_helper<F: Fs>(
     page_number: PageNumber,
     mem: &TransactionalMemory<F>,
     fixed_key_size: Option<usize>,

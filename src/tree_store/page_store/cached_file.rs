@@ -1,4 +1,5 @@
 use crate::file::File;
+use crate::file::Fs;
 use crate::file::LockedFile;
 use crate::tree_store::page_store::base::PageHint;
 use crate::{Error, Result};
@@ -54,7 +55,7 @@ impl<'a, I: SliceIndex<[u8]>> IndexMut<I> for WritablePage<'a> {
     }
 }
 
-pub(super) struct PagedCachedFile<F: File> {
+pub(super) struct PagedCachedFile<F: Fs> {
     file: F::LockedFile,
     page_size: u64,
     max_read_cache_bytes: usize,
@@ -73,9 +74,9 @@ pub(super) struct PagedCachedFile<F: File> {
     crash_countdown: AtomicU64,
 }
 
-impl<F: File> PagedCachedFile<F> {
+impl<F: Fs> PagedCachedFile<F> {
     pub(super) fn new(
-        file: F,
+        file: F::File,
         page_size: u64,
         max_read_cache_bytes: usize,
         max_write_buffer_bytes: usize,

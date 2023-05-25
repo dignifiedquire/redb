@@ -1,5 +1,5 @@
+use redb::file::StdFs;
 use redb::{Database, ReadableTable, TableDefinition};
-use std::fs::File;
 use std::sync::Arc;
 use std::thread;
 use tempfile::NamedTempFile;
@@ -9,7 +9,7 @@ const TABLE: TableDefinition<&str, &str> = TableDefinition::new("x");
 #[test]
 fn len() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let db = Arc::new(db);
     let write_txn = db.begin_write().unwrap();
     {
@@ -36,7 +36,7 @@ fn len() {
 #[test]
 fn multithreaded_insert() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
 
     const DEF1: TableDefinition<&str, &str> = TableDefinition::new("x");
     const DEF2: TableDefinition<&str, &str> = TableDefinition::new("y");

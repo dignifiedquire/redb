@@ -1,6 +1,4 @@
-use std::fs::File;
-
-use redb::{Database, Error, MultimapTableDefinition, ReadableMultimapTable};
+use redb::{file::StdFs, Database, Error, MultimapTableDefinition, ReadableMultimapTable};
 use tempfile::NamedTempFile;
 
 const STR_TABLE: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("str_to_str");
@@ -9,7 +7,7 @@ const SLICE_U64_TABLE: MultimapTableDefinition<&[u8], u64> =
 const U64_TABLE: MultimapTableDefinition<u64, u64> = MultimapTableDefinition::new("u64");
 
 fn get_vec(
-    table: &impl ReadableMultimapTable<&'static str, &'static str, File>,
+    table: &impl ReadableMultimapTable<&'static str, &'static str, StdFs>,
     key: &str,
 ) -> Vec<String> {
     let mut result = vec![];
@@ -27,7 +25,7 @@ fn get_vec(
 #[test]
 fn len() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let write_txn = db.begin_write().unwrap();
     {
         let mut table = write_txn.open_multimap_table(STR_TABLE).unwrap();
@@ -45,7 +43,7 @@ fn len() {
 #[test]
 fn is_empty() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
 
     let write_txn = db.begin_write().unwrap();
     {
@@ -62,7 +60,7 @@ fn is_empty() {
 #[test]
 fn insert() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let write_txn = db.begin_write().unwrap();
     {
         let mut table = write_txn.open_multimap_table(STR_TABLE).unwrap();
@@ -84,7 +82,7 @@ fn insert() {
 #[test]
 fn range_query() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let write_txn = db.begin_write().unwrap();
     {
         let mut table = write_txn.open_multimap_table(SLICE_U64_TABLE).unwrap();
@@ -135,7 +133,7 @@ fn range_query() {
 #[test]
 fn range_lifetime() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
 
     let definition: MultimapTableDefinition<&str, &str> = MultimapTableDefinition::new("x");
 
@@ -227,7 +225,7 @@ fn delete() {
 #[test]
 fn wrong_types() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
 
     let definition: MultimapTableDefinition<u32, u32> = MultimapTableDefinition::new("x");
     let wrong_definition: MultimapTableDefinition<u64, u64> = MultimapTableDefinition::new("x");
@@ -258,7 +256,7 @@ fn efficient_storage() {
     // Write enough values that big_key.len() * entries > db_size to check that duplicate key data is not stored
     // and entries * sizeof(u32) > page_size to validate that large numbers of values can be stored per key
     let entries = 10000;
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let table_def: MultimapTableDefinition<&[u8], u32> = MultimapTableDefinition::new("x");
     let write_txn = db.begin_write().unwrap();
     {
@@ -279,7 +277,7 @@ fn efficient_storage() {
 #[test]
 fn reopen_table() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let write_txn = db.begin_write().unwrap();
     {
         let mut table = write_txn.open_multimap_table(STR_TABLE).unwrap();
@@ -295,7 +293,7 @@ fn reopen_table() {
 #[test]
 fn iter() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
     let write_txn = db.begin_write().unwrap();
     {
         let mut table = write_txn.open_multimap_table(U64_TABLE).unwrap();
@@ -322,7 +320,7 @@ fn iter() {
 #[test]
 fn multimap_signature_lifetimes() {
     let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-    let db = Database::<File>::create(tmpfile.path()).unwrap();
+    let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
 
     let def: MultimapTableDefinition<&str, u64> = MultimapTableDefinition::new("x");
 

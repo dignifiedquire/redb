@@ -4,21 +4,33 @@ pub struct Metadata {
     pub len: u64,
 }
 
-pub trait File: Sized {
-    type LockedFile: LockedFile<File = Self>;
+pub trait Fs: Sized + Default {
+    type File: File;
+    type LockedFile: LockedFile<File = Self::File>;
 
-    fn create<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>;
-    fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>;
+    fn exists<P: AsRef<Path>>(&self, path: P) -> bool;
+    fn create<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error>;
+    fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error>;
+}
+
+pub trait File: Sized {
     fn metadata(&self) -> Result<Metadata, std::io::Error>;
     fn set_len(&self, len: u64) -> Result<(), std::io::Error>;
     fn sync_data(&self) -> Result<(), std::io::Error>;
     fn fsync(&self) -> Result<(), std::io::Error>;
 }
 
-impl File for std::fs::File {
+#[derive(Default, Clone, Copy)]
+pub struct StdFs;
+
+impl Fs for StdFs {
+    type File = std::fs::File;
     type LockedFile = crate::file_lock::LockedFile;
 
-    fn create<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+    fn exists<P: AsRef<Path>>(&self, path: P) -> bool {
+        path.as_ref().exists()
+    }
+    fn create<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -27,14 +39,16 @@ impl File for std::fs::File {
         Ok(file)
     }
 
-    fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+    fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)?;
         Ok(file)
     }
+}
 
+impl File for std::fs::File {
     fn metadata(&self) -> Result<Metadata, std::io::Error> {
         let m = self.metadata()?;
 
@@ -94,28 +108,48 @@ pub trait LockedFile: Sized {
     fn write(&self, offset: u64, data: &[u8]) -> Result<(), LockedFileError>;
 }
 
+#[derive(Default)]
+pub struct MemoryFs {
+    files: std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, MemoryFile>>,
+}
+
 /// In memory representation.
+#[derive(Default, Clone)]
 pub struct MemoryFile {
-    data: std::sync::Mutex<Vec<u8>>,
+    data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl Fs for MemoryFs {
+    type File = MemoryFile;
+    type LockedFile = MemoryLockFile;
+
+    fn exists<P: AsRef<Path>>(&self, path: P) -> bool {
+        self.files
+            .lock()
+            .unwrap()
+            .contains_key(&path.as_ref().to_path_buf())
+    }
+
+    fn create<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error> {
+        let mut this = self.files.lock().unwrap();
+        let file = MemoryFile::default();
+        this.insert(path.as_ref().to_path_buf(), file.clone());
+        Ok(file)
+    }
+
+    fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File, std::io::Error> {
+        let this = self.files.lock().unwrap();
+        match this.get(&path.as_ref().to_path_buf()) {
+            Some(file) => Ok(file.clone()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "file does not exist",
+            )),
+        }
+    }
 }
 
 impl File for MemoryFile {
-    type LockedFile = MemoryLockFile;
-
-    fn create<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
-        // TODO: store/ref path?
-        Ok(MemoryFile {
-            data: Default::default(),
-        })
-    }
-
-    fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
-        // TODO: store/ref path?
-        Ok(MemoryFile {
-            data: Default::default(),
-        })
-    }
-
     fn metadata(&self) -> Result<Metadata, std::io::Error> {
         Ok(Metadata {
             len: self.data.lock().unwrap().len() as _,

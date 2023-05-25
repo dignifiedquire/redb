@@ -6,7 +6,7 @@ use crate::tree_store::{
 };
 use crate::types::{RedbKey, RedbValue};
 use crate::{
-    file::File, Database, Error, MultimapTable, MultimapTableDefinition, MultimapTableHandle,
+    file::Fs, Database, Error, MultimapTable, MultimapTableDefinition, MultimapTableHandle,
     ReadOnlyMultimapTable, ReadOnlyTable, ReadableTable, Result, Savepoint, Table, TableDefinition,
     TableHandle, UntypedMultimapTableHandle, UntypedTableHandle,
 };
@@ -187,7 +187,7 @@ pub enum Durability {
 /// A read/write transaction
 ///
 /// Only a single [`WriteTransaction`] may exist at a time
-pub struct WriteTransaction<'db, F: File> {
+pub struct WriteTransaction<'db, F: Fs> {
     db: &'db Database<F>,
     transaction_tracker: Arc<Mutex<TransactionTracker>>,
     mem: &'db TransactionalMemory<F>,
@@ -211,7 +211,7 @@ pub struct WriteTransaction<'db, F: File> {
     live_write_transaction: MutexGuard<'db, Option<TransactionId>>,
 }
 
-impl<'db, F: File> WriteTransaction<'db, F> {
+impl<'db, F: Fs> WriteTransaction<'db, F> {
     pub(crate) fn new(
         db: &'db Database<F>,
         transaction_tracker: Arc<Mutex<TransactionTracker>>,
@@ -939,7 +939,7 @@ impl<'db, F: File> WriteTransaction<'db, F> {
     }
 }
 
-impl<'a, F: File> Drop for WriteTransaction<'a, F> {
+impl<'a, F: Fs> Drop for WriteTransaction<'a, F> {
     fn drop(&mut self) {
         *self.live_write_transaction = None;
         if !self.completed && !thread::panicking() {
@@ -955,14 +955,14 @@ impl<'a, F: File> Drop for WriteTransaction<'a, F> {
 /// A read-only transaction
 ///
 /// Read-only transactions may exist concurrently with writes
-pub struct ReadTransaction<'a, F: File> {
+pub struct ReadTransaction<'a, F: Fs> {
     transaction_tracker: Arc<Mutex<TransactionTracker>>,
     mem: &'a TransactionalMemory<F>,
     tree: TableTree<'a, F>,
     transaction_id: TransactionId,
 }
 
-impl<'db, F: File> ReadTransaction<'db, F> {
+impl<'db, F: Fs> ReadTransaction<'db, F> {
     pub(crate) fn new(
         mem: &'db TransactionalMemory<F>,
         transaction_tracker: Arc<Mutex<TransactionTracker>>,
@@ -1018,7 +1018,7 @@ impl<'db, F: File> ReadTransaction<'db, F> {
     }
 }
 
-impl<'a, F: File> Drop for ReadTransaction<'a, F> {
+impl<'a, F: Fs> Drop for ReadTransaction<'a, F> {
     fn drop(&mut self) {
         self.transaction_tracker
             .lock()
@@ -1029,7 +1029,7 @@ impl<'a, F: File> Drop for ReadTransaction<'a, F> {
 
 #[cfg(test)]
 mod test {
-    use crate::{Database, TableDefinition};
+    use crate::{file::StdFs, Database, TableDefinition};
     use tempfile::NamedTempFile;
 
     const X: TableDefinition<&str, &str> = TableDefinition::new("x");
@@ -1037,7 +1037,7 @@ mod test {
     #[test]
     fn transaction_id_persistence() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
-        let db = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+        let db = Database::<StdFs>::create(tmpfile.path()).unwrap();
         let write_txn = db.begin_write().unwrap();
         {
             let mut table = write_txn.open_table(X).unwrap();
@@ -1047,7 +1047,7 @@ mod test {
         write_txn.commit().unwrap();
         drop(db);
 
-        let db2 = Database::<std::fs::File>::create(tmpfile.path()).unwrap();
+        let db2 = Database::<StdFs>::create(tmpfile.path()).unwrap();
         let write_txn = db2.begin_write().unwrap();
         assert!(write_txn.transaction_id > first_txn_id);
     }

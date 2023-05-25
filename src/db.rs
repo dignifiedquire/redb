@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::file::File;
+use crate::file::{File, Fs, StdFs};
 use crate::multimap_table::parse_subtree_roots;
 use crate::sealed::Sealed;
 use crate::Error::Corrupted;
@@ -218,7 +218,7 @@ impl<'a, K: RedbKey + 'static, V: RedbKey + 'static> Display for MultimapTableDe
 /// # fn main() -> Result<(), Error> {
 /// # let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 /// # let filename = tmpfile.path();
-/// let db = Database::<std::fs::File>::create(filename)?;
+/// let db = Database::<file::StdFs>::create(filename)?;
 /// let write_txn = db.begin_write()?;
 /// {
 ///     let mut table = write_txn.open_table(TABLE)?;
@@ -228,14 +228,14 @@ impl<'a, K: RedbKey + 'static, V: RedbKey + 'static> Display for MultimapTableDe
 /// # Ok(())
 /// # }
 /// ```
-pub struct Database<F: File = std::fs::File> {
+pub struct Database<F: Fs = StdFs> {
     mem: TransactionalMemory<F>,
     next_transaction_id: AtomicTransactionId,
     transaction_tracker: Arc<Mutex<TransactionTracker>>,
     pub(crate) live_write_transaction: Mutex<Option<TransactionId>>,
 }
 
-impl<F: File> Database<F> {
+impl<F: Fs> Database<F> {
     /// Opens the specified file as a redb database.
     /// * if the file does not exist, or is an empty file, a new database will be initialized in it
     /// * if the file is a valid redb database, it will be opened
@@ -494,7 +494,7 @@ impl<F: File> Database<F> {
     }
 
     fn new(
-        file: F,
+        file: F::File,
         page_size: usize,
         region_size: Option<u64>,
         read_cache_size_bytes: usize,
@@ -602,15 +602,15 @@ impl<F: File> Database<F> {
 }
 
 /// Configuration builder of a redb [Database].
-pub struct Builder<F: File = std::fs::File> {
+pub struct Builder<F: Fs = StdFs> {
     page_size: usize,
     region_size: Option<u64>,
     read_cache_size_bytes: usize,
     write_cache_size_bytes: usize,
-    _file: PhantomData<F>,
+    fs: F,
 }
 
-impl<F: File> Builder<F> {
+impl<F: Fs> Builder<F> {
     /// Construct a new [Builder] with sensible defaults.
     ///
     /// ## Defaults
@@ -628,7 +628,7 @@ impl<F: File> Builder<F> {
             read_cache_size_bytes: 0,
             // TODO: Default should probably take into account the total system memory
             write_cache_size_bytes: 0,
-            _file: Default::default(),
+            fs: F::default(),
         };
 
         result.set_cache_size(1024 * 1024 * 1024);
@@ -664,12 +664,18 @@ impl<F: File> Builder<F> {
         self
     }
 
+    /// Explicitly sets the used Filesystem, rather than using the default created one.
+    pub fn set_fs(&mut self, fs: F) -> &mut Self {
+        self.fs = fs;
+        self
+    }
+
     /// Opens the specified file as a redb database.
     /// * if the file does not exist, or is an empty file, a new database will be initialized in it
     /// * if the file is a valid redb database, it will be opened
     /// * otherwise this function will return an error
     pub fn create(&self, path: impl AsRef<Path>) -> Result<Database<F>> {
-        let file = F::create(path)?;
+        let file = self.fs.create(path)?;
 
         Database::new(
             file,
@@ -682,10 +688,10 @@ impl<F: File> Builder<F> {
 
     /// Opens an existing redb database.
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Database<F>> {
-        if !path.as_ref().exists() {
+        if !self.fs.exists(path.as_ref()) {
             Err(Error::Io(ErrorKind::NotFound.into()))
-        } else if F::open(path.as_ref())?.metadata()?.len > 0 {
-            let file = F::open(path)?;
+        } else if self.fs.open(path.as_ref())?.metadata()?.len > 0 {
+            let file = self.fs.open(path)?;
             Database::new(
                 file,
                 self.page_size,
@@ -700,7 +706,7 @@ impl<F: File> Builder<F> {
 }
 
 // This just makes it easier to throw `dbg` etc statements on `Result<Database>`
-impl<F: File> std::fmt::Debug for Database<F> {
+impl<F: Fs> std::fmt::Debug for Database<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Database").finish()
     }
@@ -710,13 +716,16 @@ impl<F: File> std::fmt::Debug for Database<F> {
 mod test {
     use tempfile::NamedTempFile;
 
-    use crate::{Database, Durability, Error, ReadableTable, TableDefinition};
+    use crate::{
+        file::{MemoryFs, StdFs},
+        Database, Durability, Error, ReadableTable, TableDefinition,
+    };
 
     #[test]
     fn small_pages() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_page_size(512)
             .create(tmpfile.path())
             .unwrap();
@@ -733,7 +742,7 @@ mod test {
     fn small_pages_memory() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<crate::file::MemoryFile>::builder()
+        let db = Database::<MemoryFs>::builder()
             .set_page_size(512)
             .create(tmpfile.path())
             .unwrap();
@@ -750,7 +759,7 @@ mod test {
     fn small_pages2() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_page_size(512)
             .create(tmpfile.path())
             .unwrap();
@@ -844,7 +853,7 @@ mod test {
     fn small_pages3() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_page_size(1024)
             .create(tmpfile.path())
             .unwrap();
@@ -877,7 +886,7 @@ mod test {
     fn small_pages4() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_cache_size(1024 * 1024)
             .set_page_size(1024)
             .create(tmpfile.path())
@@ -914,7 +923,7 @@ mod test {
     fn crash_regression1() {
         let tmpfile: NamedTempFile = NamedTempFile::new().unwrap();
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_cache_size(1024 * 1024)
             .set_page_size(1024)
             .create(tmpfile.path())
@@ -939,7 +948,7 @@ mod test {
         let table_definition: TableDefinition<u64, &[u8]> = TableDefinition::new("x");
         let big_value = vec![0u8; 1024];
 
-        let db = Database::<std::fs::File>::builder()
+        let db = Database::<StdFs>::builder()
             .set_region_size(1024 * 1024)
             .create(tmpfile.path())
             .unwrap();

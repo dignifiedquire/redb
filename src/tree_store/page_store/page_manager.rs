@@ -1,4 +1,4 @@
-use crate::file::File;
+use crate::file::{File, Fs};
 use crate::transaction_tracker::TransactionId;
 use crate::tree_store::btree_base::Checksum;
 use crate::tree_store::page_store::base::PageHint;
@@ -206,7 +206,7 @@ impl Allocators {
         }
     }
 
-    fn from_bytes<F: File>(header: &DatabaseHeader, storage: &PagedCachedFile<F>) -> Result<Self> {
+    fn from_bytes<F: Fs>(header: &DatabaseHeader, storage: &PagedCachedFile<F>) -> Result<Self> {
         let page_size = header.page_size();
         let region_header_size = header.region_header_pages() * page_size;
         let region_size =
@@ -241,7 +241,7 @@ impl Allocators {
         })
     }
 
-    fn flush_to<F: File>(
+    fn flush_to<F: Fs>(
         &self,
         region_tracker_page: PageNumber,
         layout: DatabaseLayout,
@@ -360,7 +360,7 @@ struct InMemoryState {
 }
 
 impl InMemoryState {
-    fn from_bytes<F: File>(header: DatabaseHeader, file: &PagedCachedFile<F>) -> Result<Self> {
+    fn from_bytes<F: Fs>(header: DatabaseHeader, file: &PagedCachedFile<F>) -> Result<Self> {
         let allocators = Allocators::from_bytes(&header, file)?;
         Ok(Self { header, allocators })
     }
@@ -378,7 +378,7 @@ impl InMemoryState {
     }
 }
 
-pub(crate) struct TransactionalMemory<F: File> {
+pub(crate) struct TransactionalMemory<F: Fs> {
     // Pages allocated since the last commit
     allocated_since_commit: Mutex<HashSet<PageNumber>>,
     log_since_commit: Mutex<Vec<AllocationOp>>,
@@ -405,10 +405,10 @@ pub(crate) struct TransactionalMemory<F: File> {
     deferred_error: Mutex<Option<Error>>,
 }
 
-impl<F: File> TransactionalMemory<F> {
+impl<F: Fs> TransactionalMemory<F> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        file: F,
+        file: F::File,
         page_size: usize,
         requested_region_size: Option<u64>,
         read_cache_size_bytes: usize,
@@ -1488,7 +1488,7 @@ impl<F: File> TransactionalMemory<F> {
     }
 }
 
-impl<F: File> Drop for TransactionalMemory<F> {
+impl<F: Fs> Drop for TransactionalMemory<F> {
     fn drop(&mut self) {
         // Commit any non-durable transactions that are outstanding
         if self.read_from_secondary.load(Ordering::Acquire)

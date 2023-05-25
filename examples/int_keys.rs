@@ -1,9 +1,9 @@
-use redb::{Database, Error, ReadableTable, TableDefinition};
+use redb::{file::StdFs, Database, Error, ReadableTable, TableDefinition};
 
 const TABLE: TableDefinition<u64, u64> = TableDefinition::new("my_data");
 
 fn main() -> Result<(), Error> {
-    let db = Database::<std::fs::File>::create("int_keys.redb")?;
+    let db = Database::<StdFs>::create("int_keys.redb")?;
     let write_txn = db.begin_write()?;
     {
         let mut table = write_txn.open_table(TABLE)?;

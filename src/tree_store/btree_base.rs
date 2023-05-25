@@ -1,7 +1,7 @@
 use crate::tree_store::page_store::{xxh3_checksum, Page, PageImpl, PageMut, TransactionalMemory};
 use crate::tree_store::PageNumber;
 use crate::types::{RedbKey, RedbValue, RedbValueMutInPlace};
-use crate::{file::File, Result};
+use crate::{file::Fs, Result};
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -43,7 +43,7 @@ pub(crate) enum FreePolicy {
 }
 
 impl FreePolicy {
-    pub(crate) fn conditional_free<F: File>(
+    pub(crate) fn conditional_free<F: Fs>(
         &self,
         page: PageNumber,
         freed: &mut Vec<PageNumber>,
@@ -61,7 +61,7 @@ impl FreePolicy {
         }
     }
 
-    pub(crate) fn free_on_drop<F: File>(
+    pub(crate) fn free_on_drop<F: Fs>(
         &self,
         page: PageNumber,
         mem: &TransactionalMemory<F>,
@@ -98,7 +98,7 @@ impl<'a> EitherPage<'a> {
     }
 }
 
-pub struct AccessGuard<'a, V: RedbValue, F: File> {
+pub struct AccessGuard<'a, V: RedbValue, F: Fs> {
     page: EitherPage<'a>,
     offset: usize,
     len: usize,
@@ -107,7 +107,7 @@ pub struct AccessGuard<'a, V: RedbValue, F: File> {
     _value_type: PhantomData<V>,
 }
 
-impl<'a, V: RedbValue, F: File> AccessGuard<'a, V, F> {
+impl<'a, V: RedbValue, F: Fs> AccessGuard<'a, V, F> {
     pub(super) fn new(
         page: PageImpl<'a>,
         offset: usize,
@@ -179,7 +179,7 @@ impl<'a, V: RedbValue, F: File> AccessGuard<'a, V, F> {
     }
 }
 
-impl<'a, V: RedbValue, F: File> Drop for AccessGuard<'a, V, F> {
+impl<'a, V: RedbValue, F: Fs> Drop for AccessGuard<'a, V, F> {
     fn drop(&mut self) {
         match self.on_drop {
             OnDrop::None => {}
@@ -205,7 +205,7 @@ impl<'a, V: RedbValue, F: File> Drop for AccessGuard<'a, V, F> {
     }
 }
 
-pub struct AccessGuardMut<'a, V: RedbValue, F: File> {
+pub struct AccessGuardMut<'a, V: RedbValue, F: Fs> {
     root: Arc<Mutex<Option<(PageNumber, Checksum)>>>,
     mem: &'a TransactionalMemory<F>,
     page: PageMut<'a>,
@@ -217,7 +217,7 @@ pub struct AccessGuardMut<'a, V: RedbValue, F: File> {
     _value_type: PhantomData<V>,
 }
 
-impl<'a, V: RedbValue, F: File + 'a> AccessGuardMut<'a, V, F> {
+impl<'a, V: RedbValue, F: Fs + 'a> AccessGuardMut<'a, V, F> {
     pub(crate) fn new<K: RedbKey>(
         page: PageMut<'a>,
         offset: usize,
@@ -318,13 +318,13 @@ impl<'a, V: RedbValue, F: File + 'a> AccessGuardMut<'a, V, F> {
     }
 }
 
-impl<'a, V: RedbValueMutInPlace, F: File> AsMut<V::BaseRefType> for AccessGuardMut<'a, V, F> {
+impl<'a, V: RedbValueMutInPlace, F: Fs> AsMut<V::BaseRefType> for AccessGuardMut<'a, V, F> {
     fn as_mut(&mut self) -> &mut V::BaseRefType {
         V::from_bytes_mut(&mut self.page.memory_mut()[self.offset..(self.offset + self.len)])
     }
 }
 
-impl<'a, V: RedbValue, F: File> Drop for AccessGuardMut<'a, V, F> {
+impl<'a, V: RedbValue, F: Fs> Drop for AccessGuardMut<'a, V, F> {
     fn drop(&mut self) {
         // Was dropped before being returned to the user, so no clean up needed
         if self.root.lock().unwrap().is_none() {
@@ -566,7 +566,7 @@ impl<'a> LeafAccessor<'a> {
     }
 }
 
-pub(super) struct LeafBuilder<'a, 'b, F: File> {
+pub(super) struct LeafBuilder<'a, 'b, F: Fs> {
     pairs: Vec<(&'a [u8], &'a [u8])>,
     fixed_key_size: Option<usize>,
     fixed_value_size: Option<usize>,
@@ -575,7 +575,7 @@ pub(super) struct LeafBuilder<'a, 'b, F: File> {
     mem: &'b TransactionalMemory<F>,
 }
 
-impl<'a, 'b, F: File> LeafBuilder<'a, 'b, F> {
+impl<'a, 'b, F: Fs> LeafBuilder<'a, 'b, F> {
     pub(super) fn required_bytes(num_pairs: usize, keys_values_bytes: usize) -> usize {
         RawLeafBuilder::required_bytes(num_pairs, keys_values_bytes)
     }
@@ -1308,7 +1308,7 @@ impl<'a: 'b, 'b, T: Page + 'a> BranchAccessor<'a, 'b, T> {
     }
 }
 
-pub(super) struct BranchBuilder<'a, 'b, F: File> {
+pub(super) struct BranchBuilder<'a, 'b, F: Fs> {
     children: Vec<(PageNumber, Checksum)>,
     keys: Vec<&'a [u8]>,
     total_key_bytes: usize,
@@ -1316,7 +1316,7 @@ pub(super) struct BranchBuilder<'a, 'b, F: File> {
     mem: &'b TransactionalMemory<F>,
 }
 
-impl<'a, 'b, F: File> BranchBuilder<'a, 'b, F> {
+impl<'a, 'b, F: Fs> BranchBuilder<'a, 'b, F> {
     pub(super) fn new(
         mem: &'b TransactionalMemory<F>,
         child_capacity: usize,

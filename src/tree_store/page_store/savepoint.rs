@@ -1,4 +1,4 @@
-use crate::file::File;
+use crate::file::Fs;
 use crate::transaction_tracker::{SavepointId, TransactionId, TransactionTracker};
 use crate::tree_store::{Checksum, PageNumber, TransactionalMemory};
 use std::mem::size_of;
@@ -36,7 +36,7 @@ pub struct Savepoint {
 
 impl Savepoint {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_ephemeral<F: File>(
+    pub(crate) fn new_ephemeral<F: Fs>(
         mem: &TransactionalMemory<F>,
         transaction_tracker: Arc<Mutex<TransactionTracker>>,
         id: SavepointId,

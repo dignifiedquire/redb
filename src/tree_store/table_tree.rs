@@ -3,7 +3,7 @@ use crate::tree_store::btree_base::Checksum;
 use crate::tree_store::btree_iters::AllPageNumbersBtreeIter;
 use crate::tree_store::{BtreeMut, BtreeRangeIter, PageNumber, TransactionalMemory};
 use crate::types::{RedbKey, RedbValue, RedbValueMutInPlace, TypeName};
-use crate::{file::File, DatabaseStats, Error, Result};
+use crate::{file::Fs, DatabaseStats, Error, Result};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::mem;
@@ -377,12 +377,12 @@ impl RedbValue for InternalTableDefinition {
     }
 }
 
-pub struct TableNameIter<'a, F: File> {
+pub struct TableNameIter<'a, F: Fs> {
     inner: BtreeRangeIter<'a, &'static str, InternalTableDefinition, F>,
     table_type: TableType,
 }
 
-impl<'a, F: File> Iterator for TableNameIter<'a, F> {
+impl<'a, F: Fs> Iterator for TableNameIter<'a, F> {
     type Item = Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -402,7 +402,7 @@ impl<'a, F: File> Iterator for TableNameIter<'a, F> {
     }
 }
 
-pub(crate) struct TableTree<'txn, F: File> {
+pub(crate) struct TableTree<'txn, F: Fs> {
     tree: BtreeMut<'txn, &'static str, InternalTableDefinition, F>,
     mem: &'txn TransactionalMemory<F>,
     // Cached updates from tables that have been closed. These must be flushed to the btree
@@ -410,7 +410,7 @@ pub(crate) struct TableTree<'txn, F: File> {
     freed_pages: Arc<Mutex<Vec<PageNumber>>>,
 }
 
-impl<'txn, F: File> TableTree<'txn, F> {
+impl<'txn, F: Fs> TableTree<'txn, F> {
     pub(crate) fn new(
         master_root: Option<(PageNumber, Checksum)>,
         mem: &'txn TransactionalMemory<F>,

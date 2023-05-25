@@ -1,3 +1,4 @@
+use redb::file::StdFs;
 use redb::{
     Database, Error, ReadableTable, RedbKey, RedbValue, Table, TableDefinition, TableHandle,
     WriteTransaction,
@@ -35,7 +36,7 @@ impl SpecialValuesDb {
 }
 
 struct SpecialValuesTransaction<'db> {
-    inner: WriteTransaction<'db, File>,
+    inner: WriteTransaction<'db, StdFs>,
     file: &'db mut File,
 }
 
@@ -59,7 +60,7 @@ impl<'db> SpecialValuesTransaction<'db> {
 }
 
 struct SpecialValuesTable<'db, 'txn, K: RedbKey + 'static, V: RedbValue + 'static> {
-    inner: Table<'db, 'txn, K, (u64, u64), File>,
+    inner: Table<'db, 'txn, K, (u64, u64), StdFs>,
     file: &'txn mut File,
     _value_type: PhantomData<V>,
 }
